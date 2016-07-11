@@ -1,0 +1,41 @@
+aggregate
+
+$match
+  analysis.name: $in $nin
+  events.name: $in $nin
+  events.value: $lt $gt
+  events.freq: $eq $ne
+  events: $size
+
+$project
+  events: $filter
+    name
+    value
+    freq
+  events: add 
+  events.value: $cond
+
+==>  if events modified except value
+minimize
+<==
+
+$project // if events modified
+  value: recalc
+
+$sort // topN
+  value
+
+$limit // topN
+  value
+
+// stop - cat, topN
+
+$group
+  $sum
+  $sum:1
+  $avg
+
+$project
+  $multiply
+  { $divide: [ 1.0, "$total" ] } 
+  

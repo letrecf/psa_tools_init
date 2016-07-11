@@ -1,0 +1,89 @@
+import argparse
+
+class FilterAction(argparse.Action):
+	def __init__(self, option_strings, dest, nargs='*', **kwargs):
+		transform_parser = argparse.ArgumentParser(prefix_chars='*',description='Transforms MCS from PSA models.')
+		transform_parser.add_argument('*event', required=False, dest='eventList', default=[], nargs='*', help='List of events')
+		transform_parser.add_argument('*analysis', required=False, dest='analysisList', default=[], nargs='*', help='List of analyses')
+		transform_parser.add_argument('*file', required=False, dest='fileList', default=[], nargs='*', help='List of files')
+		transform_parser.add_argument('*above', required=False, dest='eventValue', type=float, const=-1.0, default=-1.0, 
+                                              help='Filter MCS with value above the limit for any event')
+		transform_parser.add_argument('*below', required=False, dest='belowValue', type=float, const=-1.0, default=-1.0, 
+                                              help='Filter MCS with value below the limit for any event')
+		transform_parser.add_argument('defList', default=[], nargs='*', help='List of defaults')
+		self.parser = transform_parser
+		super(FilterAction, self).__init__(option_strings, dest, **kwargs, nargs=nargs)
+	def __call__(self, parser, namespace, values, option_string=None):
+		res=self.parser.parse_args(values)
+		setattr(namespace, self.dest, res)
+
+class SetAction(argparse.Action):
+	def __init__(self, option_strings, dest, nargs='*', **kwargs):
+		set_parser = argparse.ArgumentParser(description='Sets value for events in MCS.')
+		set_parser.add_argument('value', type=float, help='Event value')
+		set_parser.add_argument('event', help='Event name')
+		self.parser = set_parser
+		self.lst = []
+		super(SetAction, self).__init__(option_strings, dest, **kwargs, nargs=nargs)
+	def __call__(self, parser, namespace, values, option_string=None):
+		res=self.parser.parse_args(values)
+		self.lst.append(res)
+		setattr(namespace, self.dest, self.lst)
+
+class MakeAction(argparse.Action):
+	def __init__(self, option_strings, dest, nargs='*', **kwargs):
+		set_parser = argparse.ArgumentParser(description='Make events')
+		set_parser.add_argument('event', help='Event name')
+		set_parser.add_argument('type', choices=['q','freq'], help='Event type')
+		set_parser.add_argument('value', type=float, help='Event value')
+		self.parser = set_parser
+		self.lst = []
+		super(SetAction, self).__init__(option_strings, dest, **kwargs, nargs=nargs)
+	def __call__(self, parser, namespace, values, option_string=None):
+		res=self.parser.parse_args(values)
+		self.lst.append(res)
+		setattr(namespace, self.dest, self.lst)
+
+main_parser = argparse.ArgumentParser(description='Process MCS from PSA models.')
+# model
+main_parser.add_argument('model', help='PSA model name')
+# filter
+main_parser.add_argument('--include', required=False, dest='includes', action=FilterAction, default='', nargs='*', help='List of include filters')
+main_parser.add_argument('--exclude', required=False, dest='excludes', action=FilterAction, default='', nargs='*', help='List of exclude filters')
+main_parser.add_argument('--min', required=False, metavar='N', type=int, nargs='?', dest='minMCS', const=0, default=0, help='Minimum number of events in MCS')
+main_parser.add_argument('--max', required=False, metavar='N', type=int, nargs='?', dest='maxMCS', const=0, default=0, help='Maximum number of events in MCS')
+# map/transform
+main_parser.add_argument('--make', required=False, dest='makeEvents', action=MakeAction, default='', nargs=3, help='Make event')
+main_parser.add_argument('--add', required=False, dest='addEvents', default='', nargs='*', help='Add event(s) to each MCS')
+main_parser.add_argument('--remove', required=False, dest='removeEvents', default='', nargs='*', help='Remove event(s) from MCS if found')
+main_parser.add_argument('--no-freq', required=False, dest='removeFreq', action='store_true', help='Remove frequency event from MCS if found')
+main_parser.add_argument('--no-below', required=False, dest='belowEvents', type=float, help='Remove event(s) with probability/frequency strictly below the limit')
+main_parser.add_argument('--no-above', required=False, dest='aboveEvents', type=float, help='Remove event(s) with probability/frequency strictly above the limit')
+main_parser.add_argument('--set', required=False, dest='setEvents', action=SetAction, default='', nargs=2, help='Set event(s) to probability/frequency')
+main_parser.add_argument('--minimize', required=False, dest='requireMinimize', choices=['on','off'], default='off')
+main_parser.add_argument('--action', required=False, dest='dummy', action='store_true')
+
+# commands
+subparsers = main_parser.add_subparsers(dest='command',help='commands')
+# cat
+parser_cat = subparsers.add_parser('cat', help='categorize events in MCS')
+parser_cat.add_argument('--method', dest='cat_method',choices=['lda', 'nmf'], default='nmf', help='Method for event categorization')
+parser_cat.add_argument('--feature', metavar='N', type=int, dest="featureN", nargs='?', const=20, default=20, help='Number of categories for events')
+parser_cat.add_argument('--tf-only', required=False, dest='tf_only', action='store_true')
+# sum
+parser_sum = subparsers.add_parser('sum', help='sum values of all MCS')
+# count
+parser_count = subparsers.add_parser('count', help='count all MCS')
+# avg
+parser_avg = subparsers.add_parser('avg', help='average of all MCS')
+# top N
+parser_topN = subparsers.add_parser('top', help='return top N MCS with highest values')
+parser_topN.add_argument('topN', metavar='N', type=int, nargs='?', const=100, default=100, help='Number of MCS')
+# factor X
+parser_factor = subparsers.add_parser('factor', help='sum values of all MCS and multiply them by factor X')
+parser_factor.add_argument('factorX', metavar='X', type=float, nargs='?', const=1.0, default=1.0, help='Factor for MCS sum')
+# inv_sum
+parser_inv = subparsers.add_parser('inv_sum', help='inverse of sum for values of all MCS')
+
+res = main_parser.parse_args('z --include A B *file D.txt H.txt --exclude *analysis E R T --set 1.0 F --set 2.0 J --action factor 1.1'.split())
+print(res)

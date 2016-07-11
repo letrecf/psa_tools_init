@@ -1,0 +1,40 @@
+Namespace(
+addEvents='', 
+command='factor', 
+dummy=True, 
+excludes=Namespace(analysisList=['E', 'R', 'T'], defList=[], eventList=[], fileList=[]), 
+factorX=1.1, 
+includes=Namespace(analysisList=[], defList=['A', 'B'], eventList=[], fileList=['D.txt', 'H.txt']), 
+isMinimized=False, 
+maxMCS=0, 
+minMCS=0, 
+model='z', 
+removeEvents='', 
+removeFreq=False, 
+setEvents=[Namespace(event='F', value=1.0), Namespace(event='J', value=2.0)]
+)
+
+
+db.mcs.aggregate([
+{$match: 
+	{position:{$lt:(maxpos+1)}
+},
+{$project : 
+	{ _id:1, origin:1, value:1, analysis:1, position:1, events:1, events_size:{$size:"$events"}}
+},
+{$match:
+	{$and:[
+		{events:{$in:["A"]}},
+		{events:{$nin:["D"]}},
+		{analysis:{$in:["A1"]}},
+		{analysis:{$nin:["A2"]}},
+		{events_size:{$lt:(maxMCS+1)}},
+		{events_size:{$gt:(minMCS-1)}},
+	]}
+},
+{$project : 
+	{ _id:1, origin:1, value:1, analysis:1, position:1, 
+		events: {$setDifference:[{$setUnion:["$events",add_lst]},remove_list]}
+	}
+} 
+])

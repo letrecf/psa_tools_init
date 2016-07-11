@@ -1,0 +1,243 @@
+import sys, traceback, argparse, os, datetime, codecs
+import re, csv, json
+from pymongo import MongoClient
+from openpyxl import load_workbook
+
+utf8_enc = 'utf-8'
+
+MCS_COLLECTION_NAME = 'mcs'
+EV_COLLECTION_NAME  = 'events'
+ANA_COLLECTION_NAME = 'analyses'
+INF_COLLECTION_NAME = 'info'
+
+class mcs(object):
+  def __init__(self):
+    self.analysis=""
+    self.position=0
+    self.value=0.0
+    self.origin=""
+    self.events=[]
+
+  def asObj(self):
+    return self.__dict__
+
+
+def change_encoding(s,to_enc):
+  return s.encode(to_enc)
+
+def get_valid_filename(s):
+  s=s.strip().replace(" ","_")
+  return re.sub(r"(?u)[^-\w]","",s)
+
+def skip_read(f,s):
+  for i in range(0,s):
+    f.readline()
+
+def get_words(s):
+  return re.split("\s+",s)
+
+def get_value(s,expected):
+  hlen=len(expected)
+  header=s[:hlen]
+  value=s[hlen:]
+  if (header != expected):
+    print("WARNING: header not found in '%s'" % s.strip())
+  else:
+    return (value.strip())
+
+class rsimport(object):
+  def __init__(self):
+    self.work_dir=""
+    self.model=""
+    self.noclean=False
+    self.from_enc="cp850"
+    self.verbose_output=False
+
+  def parse_MCS_row(self,s):
+    return [i.strip() for i in [s[0:6],s[6:17],s[24:46],s[46:69]]]
+  
+  def read_mcs_file(self,f):
+    skip = lambda x : skip_read(f,x)
+    change_enc = lambda s : change_encoding(s,utf8_enc)
+    # header
+    skip(4)
+    prj = get_value(change_enc(f.readline()),"Project    : ")
+    # check if result belongs to the expected model
+    if prj != self.model:
+      print("WARNING: file <%s> is ignored because it belongs to different model '%s'" % (f.name,prj))
+      return
+    skip(1)
+    aname=get_value(change_enc(f.readline()),"Top event  : ")
+    skip(2)
+    avalue=float(get_value(change_enc(f.readline()),"Frequency = "))
+    skip(4)
+    # mcs list
+    mcs_count=0
+    mcs_list=[]
+    while True:
+      try:
+        sline=change_enc(f.next())
+        if len(sline)==0:
+          break
+        expr=self.parse_mcs_row(sline)
+        if expr[0]=="" and expr[2]=="":
+          break
+        if expr[0]=="":
+          mcs_add=expr[2:]
+        else:
+          # new mcs
+          mcs_count += 1
+          if int(expr[0])==mcs_count:
+             current_mcs=mcs()
+             current_mcs.position=mcs_count
+             current_mcs.value=float(expr[1])
+             current_mcs.analysis=aname
+             current_mcs.origin=os.path.basename(f.name)
+             mcs_list.append(current_mcs)
+             mcs_add=filter(None,expr[2:])
+          else:
+             raise RuntimeError("MCS index is out of sync")
+          mcs_list[mcs_count].events+=mcs_add
+      except StopIteration:
+        break
+    # import to db
+    client = MongoClient()
+    db = client[self.model]
+    coll = db[MCS_COLLECTION_NAME]
+    for m in mcs_list:
+      coll.insert(m.asObj())
+    print("--> found %i" % len(mcs_list))
+
+  def read_fre_file(self,f):
+    skip = lambda x : skip_read(f,x)
+    change_enc = lambda s : change_encoding(s,utf8_enc)
+    # skip until *EVENTS* line
+    s=""
+    while not(s=="*EVENTS*"):
+      s=change_enc(f.readline().strip())
+    # write values to the existing events; check if value already exists and is the same
+    client = MongoClient()
+    db = client[self.model]
+    coll = db[EV_COLLECTION_NAME]
+    while True:
+      s=change_enc(f.readline())
+      if (not s) or (s.strip()==""):
+        break
+      name=s[:20].strip()
+      value=float(s[20:].strip())
+      filter = {"_id":name,"value":{"$exists":False }}
+      data = { "value":value, "value_origin":os.path.basename(f.name) }
+      coll.update(filter,data,upsert=False)
+    print "--> completed."
+
+  def iter_files(self,fu,ext):
+    for f in os.listdir(self.work_dir):
+      if f.endswith(ext):
+        print("Reading %s..." % f)
+        with codecs.open(os.path.join(self.work_dir,f),"r",encoding=self.from_enc) as fo:
+          fu(fo)
+
+  def import_excel(self,fn):
+    wb = load_workbook(filename=fn,read_only=True)
+    client = MongoClient()
+    db = client[self.model]
+
+    # import event descriptions
+    print "Adding event descriptions..."
+    coll = db[EV_COLLECTION_NAME]
+    ws=wb["Basic Event"]
+    for e in ws.rows:
+      filter = {"_id":e[0].value}
+      if e[2].value=="Frequency":
+        data = {"$set":{"text":e[1].value,"freq":True}}
+      else:
+        data = {"$set":{"text":e[1].value}}
+      coll.update(filter,data,upsert=False)
+    print "--> completed."
+
+    # import analysis descriptions
+    print "Adding analysis descriptions..."
+    coll = db[ANA_COLLECTION_NAME]
+    ws=wb["Analysis Case"]
+    typ=["Consequence Analysis Case"]
+    for a in ws.rows:
+      t = a[0].value
+      if t in typ:
+        filter = {"_id":a[1].value}
+        data = {"$set":{"text":a[2].value}}
+        coll.update(filter,data,upsert=False)
+    print "--> completed."
+
+  def run_import(self):
+    client = MongoClient()
+    if not self.noclean:
+      client.drop_database(self.model)
+    db = client[self.model]
+
+    # write info
+    coll = db[INF_COLLECTION_NAME]
+    coll.insert({"name":self.model,"path":os.path.abspath(self.work_dir),"from_enc":self.from_enc,"created":datetime.datetime.utcnow()})
+
+    # import mcs
+    self.iter_files(self.read_mcs_file,".MCS")
+
+    # create indexes
+    print "Creating indexes over mcs collection..."   
+    coll = db[MCS_COLLECTION_NAME]
+    coll.create_index("analysis")
+    coll.create_index("events")
+    print "Done."
+
+    print "Creating analyses collection..."
+    coll = db[MCS_COLLECTION_NAME]
+    coll.aggregate([{"$group":{"_id":"$analysis","total":{"$sum":"$value"},"origin":{"$addToSet":"$origin"}}},{"$out":ANA_COLLECTION_NAME}])
+    print("Found %i." % (db[ANA_COLLECTION_NAME].count()))
+
+    print "Creating events collection..."
+    coll = db[MCS_COLLECTION_NAME]
+    coll.aggregate([{"$unwind":"$events"},{"$group":{"_id":"$events","origin":{"$addToSet":"$origin"},"analysis":{"$addToSet":"$analysis"}}},{"$out":EV_COLLECTION_NAME}])
+    print("Found %i." % (db[EV_COLLECTION_NAME].count()))
+        
+    # import fre
+    self.iter_files(self.read_fre_file,".FRE")
+
+    # import xlsx
+    fn = os.path.join(self.work_dir,self.model+".xlsx")
+    if os.path.isfile(fn):
+      print("Reading %s..." % fn)
+      self.import_excel(fn)
+
+  def process_args(self,args):
+    self.work_dir=args.work_dir
+    self.model=args.model
+    self.noclean=args.noclean
+    self.from_enc=args.from_enc
+    self.verbose_output=args.verbose_output
+    self.run_import()
+
+def main(argv):
+  helper = argparse.ArgumentParser(description='Import MCS from PSA model.')
+  helper.add_argument("-d","--dir",dest="work_dir",type=str,required=False,default=".",help="Working directory")
+  helper.add_argument("-m","--model",dest="model",type=str,required=True,help="Model name")
+  helper.add_argument("--no-clean",dest="noclean",action="store_true",required=False,help="Do not drop database before import")
+  helper.add_argument("--enc",dest="from_enc",type=str,required=False,default="cp850",help="Input encoding")
+  helper.add_argument("-v","--verbose",dest="verbose_output",action="store_true",required=False,help="Print verbose output")
+  args=""
+  try:
+    if (len(argv)<1):
+      helper.print_help()
+      sys.exit(1)
+    args=helper.parse_args()
+    i=rsimport()
+    i.process_args(args)
+    sys.exit(0)
+  except Exception, e:
+    print("Error: %s" % str(e))
+    traceback.print_exc()
+    sys.exit(-1)
+
+
+if __name__ == "__main__":
+  main(sys.argv[1:])
+    
+    

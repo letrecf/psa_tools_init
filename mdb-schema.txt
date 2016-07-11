@@ -1,0 +1,45 @@
+analyses:
+_id:string
+total:float
+origin:string list
+text:string
+
+events:
+_id:string
+origin:string list
+analysis:string list
+value_origin:string
+value:float
+text:string
+freq:boolean
+
+mcs:
+_id:GUID
+origin:string
+value:float
+analysis:string
+position:int
+events:string list
+
+info:
+_id:GUID
+path:string
+created:isodate
+name:string
+from_enc:string
+
+
+
+mcs2:
+_id:GUID
+file:string
+value:float
+position:int
+analysis:
+	name:string
+	value:float
+events:
+	list
+		name:string
+		value:float
+		freq:boolean
