@@ -1,0 +1,51 @@
+import sys,traceback,argparse,os,re
+import StringIO
+import pymongo
+import numpy as np
+from sklearn.feature_extraction.text import CountVectorizer
+from pymongo import MongoClient
+from scipy.sparse import csr_matrix, find, triu, tril
+from sets import Set
+
+REGEXPR_DEF=r"\*?([^\*]+)\*?"
+MCS_COLLECTION_NAME="mcs"
+EV_FIELD="events"
+
+EV_COLLECTION_NAME="events"
+
+stopwords=[]
+
+def doc_collection_by_mcs(dbname,find_expr,msg_step):
+  count=0
+  client=MongoClient()
+  db=client[dbname]
+  coll=db[MCS_COLLECTION_NAME]
+  res=coll.find(find_expr)
+  while True:
+    try:
+      x=res.next()
+      count+=1
+      if count % msg_step == 0:
+        print("%i MCS processed..." % count)
+      xf=filter(lambda w:w not in stop_words,x[EV_FIELD])
+      yield("*".join(xf))
+    except StopIteration:
+      print("%i MCS in total." % count)
+      break
+  res.close()
+
+find_expr={"analysis":"some"}
+msg_step=1000
+
+print "Reading MCS..."
+cv=CountVectorizer(token_pattern=REGEXPR_DEF)
+cv_m=cv.fit_transform(doc_collection_by_mcs("dbname",find_expr,msg_step))
+
+print "Minimizing MCS..."
+cv2=cv_m*(cv_m.transpose())
+cv2i=csr_matrix(np.add(np.reciprocal(cv2.diagonal().astype(float)),0.001))
+cv2r=tril(cv2,k=-1).multiply(cv2i).floor().rint()
+cv2r.eliminate_zeros()
+(ri,ci)=cv2r.nonzero()
+res=Set(ri)
+print len(res)
